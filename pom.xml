@@ -18,6 +18,11 @@
 
     <properties>
         <java.version>21</java.version>
+        <jacoco.version>0.8.15</jacoco.version>
+        <pitest.version>1.30.0</pitest.version>
+        <pitest-junit5.version>1.2.3</pitest-junit5.version>
+        <coverage.minimum>0.95</coverage.minimum>
+        <mutation.minimum>90</mutation.minimum>
     </properties>
 
     <dependencies>
@@ -88,6 +93,97 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <configuration>
+                    <excludes>
+                        <exclude>com/miniauthorizer/MiniAuthorizerApplication.class</exclude>
+                    </excludes>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>check</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>${coverage.minimum}</minimum>
+                                        </limit>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>${coverage.minimum}</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <!-- Mutation testing: ./mvnw test-compile org.pitest:pitest-maven:mutationCoverage -->
+                <groupId>org.pitest</groupId>
+                <artifactId>pitest-maven</artifactId>
+                <version>${pitest.version}</version>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.pitest</groupId>
+                        <artifactId>pitest-junit5-plugin</artifactId>
+                        <version>${pitest-junit5.version}</version>
+                    </dependency>
+                </dependencies>
+                <configuration>
+                    <targetClasses>
+                        <param>com.miniauthorizer.*</param>
+                    </targetClasses>
+                    <!-- Bean factory methods run once, when the Spring test context starts, and PIT reuses
+                         cached contexts between mutants, so mutating them proves nothing. They are covered
+                         by the integration tests instead. -->
+                    <excludedClasses>
+                        <param>com.miniauthorizer.MiniAuthorizerApplication</param>
+                        <param>com.miniauthorizer.config.*</param>
+                        <param>com.miniauthorizer.security.SecurityConfig</param>
+                    </excludedClasses>
+                    <!-- Tests against MySQL need Docker and a fresh database per mutant; the fast suite is enough here. -->
+                    <excludedGroups>
+                        <param>integration</param>
+                    </excludedGroups>
+                    <mutators>
+                        <mutator>STRONGER</mutator>
+                    </mutators>
+                    <threads>4</threads>
+                    <timestampedReports>false</timestampedReports>
+                    <mutationThreshold>${mutation.minimum}</mutationThreshold>
+                    <outputFormats>
+                        <param>HTML</param>
+                        <param>XML</param>
+                    </outputFormats>
+                </configuration>
             </plugin>
         </plugins>
     </build>

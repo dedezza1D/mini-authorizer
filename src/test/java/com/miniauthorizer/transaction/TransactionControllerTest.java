@@ -1,16 +1,16 @@
 package com.miniauthorizer.transaction;
 
+import com.miniauthorizer.security.SecurityConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
-import com.miniauthorizer.security.SecurityConfig;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
-import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.http.MediaType;
+import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -56,14 +56,18 @@ class TransactionControllerTest {
     }
 
     @ParameterizedTest
-    @EnumSource(RejectionReason.class)
-    void answersUnprocessableEntityWithTheRejectionCode(RejectionReason reason) throws Exception {
+    @CsvSource({
+            "CARD_NOT_FOUND, CARTAO_INEXISTENTE",
+            "INVALID_PIN, SENHA_INVALIDA",
+            "INSUFFICIENT_BALANCE, SALDO_INSUFICIENTE"
+    })
+    void answersUnprocessableEntityWithTheContractCode(RejectionReason reason, String expectedBody) throws Exception {
         doThrow(new TransactionRejectedException(reason)).when(authorizer).authorize(any());
 
         mvc.perform(post("/transacoes").contentType(MediaType.APPLICATION_JSON).content(TRANSACTION))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.TEXT_PLAIN))
-                .andExpect(content().string(reason.code()));
+                .andExpect(content().string(expectedBody));
     }
 
     @Test

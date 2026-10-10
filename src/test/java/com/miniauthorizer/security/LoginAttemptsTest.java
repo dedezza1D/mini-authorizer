@@ -5,6 +5,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.authentication.event.AuthenticationFailureBadCredentialsEvent;
@@ -15,14 +17,20 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
 
-@ExtendWith(MockitoExtension.class)
+@ExtendWith({MockitoExtension.class, OutputCaptureExtension.class})
 class LoginAttemptsTest {
 
     private static final Instant NOW = Instant.parse("2026-01-15T10:00:00Z");
+    private static final String LOCK_WARNING = "API user 'terminal' locked";
 
     @Mock
     private ApiUserRepository repository;
@@ -35,13 +43,30 @@ class LoginAttemptsTest {
 
     @Test
     void countsAWrongPasswordAndThenLocksWhenTheLimitIsReached() {
-        loginAttempts().onWrongPassword(new AuthenticationFailureBadCredentialsEvent(
-                new TestingAuthenticationToken("terminal", "wrong"), new BadCredentialsException("Bad credentials")));
+        loginAttempts().onWrongPassword(wrongPassword());
 
         InOrder order = inOrder(repository);
         order.verify(repository).incrementFailedAttempts("terminal");
         order.verify(repository).lockWhenAttemptsReach("terminal", 3, NOW.plus(Duration.ofMinutes(10)));
         verifyNoMoreInteractions(repository);
+    }
+
+    @Test
+    void warnsWhenTheUserGetsLocked(CapturedOutput output) {
+        when(repository.lockWhenAttemptsReach(anyString(), anyInt(), any())).thenReturn(1);
+
+        loginAttempts().onWrongPassword(wrongPassword());
+
+        assertThat(output.getOut()).contains(LOCK_WARNING + " for PT10M after 3 failed logins");
+    }
+
+    @Test
+    void staysQuietWhileTheLimitIsNotReached(CapturedOutput output) {
+        when(repository.lockWhenAttemptsReach(anyString(), anyInt(), any())).thenReturn(0);
+
+        loginAttempts().onWrongPassword(wrongPassword());
+
+        assertThat(output.getOut()).doesNotContain(LOCK_WARNING);
     }
 
     @Test
@@ -51,5 +76,10 @@ class LoginAttemptsTest {
 
         verify(repository).resetFailedAttempts("terminal");
         verifyNoMoreInteractions(repository);
+    }
+
+    private static AuthenticationFailureBadCredentialsEvent wrongPassword() {
+        return new AuthenticationFailureBadCredentialsEvent(
+                new TestingAuthenticationToken("terminal", "wrong"), new BadCredentialsException("Bad credentials"));
     }
 }
