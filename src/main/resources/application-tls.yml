@@ -1,0 +1,33 @@
+# HTTPS served by the application itself, for environments without a TLS-terminating proxy.
+# The default profile keeps plain HTTP on 8080, as the API contract requires.
+server:
+  port: ${SERVER_PORT:8443}
+  ssl:
+    enabled: true
+    bundle: server
+
+spring:
+  ssl:
+    bundle:
+      pem:
+        server:
+          # Picks up renewed certificates (cert-manager, certbot) without a restart.
+          reload-on-update: true
+          keystore:
+            certificate: ${TLS_CERTIFICATE:file:certs/server.crt}
+            private-key: ${TLS_PRIVATE_KEY:file:certs/server.key}
+          # With an SSL bundle, protocols and ciphers must be set here: server.ssl.ciphers and
+          # server.ssl.enabled-protocols are ignored.
+          options:
+            enabled-protocols: TLSv1.3,TLSv1.2
+            # TLS 1.3 suites plus TLS 1.2 suites with forward secrecy and authenticated encryption only.
+            ciphers:
+              - TLS_AES_256_GCM_SHA384
+              - TLS_AES_128_GCM_SHA256
+              - TLS_CHACHA20_POLY1305_SHA256
+              - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+              - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+              - TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+              - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+              - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+              - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256

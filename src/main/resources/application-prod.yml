@@ -5,6 +5,12 @@ app:
       username: ${API_USERNAME}
       password: ${API_PASSWORD}
 
+# Behind a TLS-terminating load balancer, trust its X-Forwarded-* headers so the request is seen as
+# HTTPS: Spring Security then sends HSTS and generated URLs use https. Only safe when the
+# application is reachable exclusively through that proxy.
+server:
+  forward-headers-strategy: native
+
 spring:
   datasource:
     url: ${DB_URL}
