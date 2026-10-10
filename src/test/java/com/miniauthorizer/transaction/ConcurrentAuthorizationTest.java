@@ -25,7 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Fires simultaneous transactions at the same card. Each call runs in its own thread, database
  * connection and transaction, which is what two application instances look like to MySQL.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
+@SpringBootTest
 class ConcurrentAuthorizationTest extends MySqlIntegrationTest {
 
     private static final String APPROVED = "APPROVED";

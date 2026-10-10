@@ -1,0 +1,12 @@
+# Production profile: no default credentials. Startup fails if they are not provided.
+app:
+  security:
+    bootstrap-user:
+      username: ${API_USERNAME}
+      password: ${API_PASSWORD}
+
+spring:
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}

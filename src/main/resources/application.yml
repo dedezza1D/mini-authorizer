@@ -24,3 +24,10 @@ management:
     web:
       exposure:
         include: health,info
+
+app:
+  security:
+    # Local defaults match the credentials of the API contract. The prod profile has none.
+    bootstrap-user:
+      username: ${API_USERNAME:username}
+      password: ${API_PASSWORD:password}

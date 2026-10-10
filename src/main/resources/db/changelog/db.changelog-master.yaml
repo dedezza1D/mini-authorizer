@@ -1,3 +1,5 @@
 databaseChangeLog:
   - include:
       file: db/changelog/001-create-card-table.sql
+  - include:
+      file: db/changelog/002-create-api-user-table.sql
