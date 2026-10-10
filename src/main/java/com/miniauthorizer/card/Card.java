@@ -5,7 +5,6 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.Version;
-import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.math.BigDecimal;
 import java.util.Objects;
@@ -46,8 +45,8 @@ public class Card {
         return new Card(number, pinHash, INITIAL_BALANCE);
     }
 
-    public boolean pinMatches(String pin, PasswordEncoder passwordEncoder) {
-        return passwordEncoder.matches(pin, pinHash);
+    public boolean pinMatches(String pin, PinHasher pinHasher) {
+        return pinHasher.matches(number, pin, pinHash);
     }
 
     public boolean canAfford(BigDecimal amount) {

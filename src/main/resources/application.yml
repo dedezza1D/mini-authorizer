@@ -36,3 +36,10 @@ app:
     lockout:
       max-attempts: 5
       duration: 15m
+    # Base64 secret of at least 32 bytes mixed into every PIN hash. This value is for local use
+    # only and is public; real environments set PIN_PEPPER from a secret manager.
+    pin-pepper: ${PIN_PEPPER:XscXnNomhBPzKdr32g5yzev4iYv7SkDW2ud36CCzyBE=}
+
+  idempotency:
+    retention: P7D
+    cleanup-interval: PT1H

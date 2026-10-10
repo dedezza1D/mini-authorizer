@@ -4,6 +4,7 @@ app:
     bootstrap-user:
       username: ${API_USERNAME}
       password: ${API_PASSWORD}
+    pin-pepper: ${PIN_PEPPER}
 
 # Behind a TLS-terminating load balancer, trust its X-Forwarded-* headers so the request is seen as
 # HTTPS: Spring Security then sends HSTS and generated URLs use https. Only safe when the

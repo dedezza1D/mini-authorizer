@@ -1,8 +1,7 @@
 package com.miniauthorizer.card;
 
+import com.miniauthorizer.support.TestPins;
 import org.junit.jupiter.api.Test;
-import org.springframework.security.crypto.factory.PasswordEncoderFactories;
-import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.math.BigDecimal;
 
@@ -38,10 +37,9 @@ class CardTest {
 
     @Test
     void checksPinAgainstTheStoredHash() {
-        PasswordEncoder encoder = PasswordEncoderFactories.createDelegatingPasswordEncoder();
-        Card card = Card.issue(NUMBER, encoder.encode("1234"));
+        Card card = Card.issue(NUMBER, TestPins.HASHER.hash(NUMBER, "1234"));
 
-        assertThat(card.pinMatches("1234", encoder)).isTrue();
-        assertThat(card.pinMatches("4321", encoder)).isFalse();
+        assertThat(card.pinMatches("1234", TestPins.HASHER)).isTrue();
+        assertThat(card.pinMatches("4321", TestPins.HASHER)).isFalse();
     }
 }

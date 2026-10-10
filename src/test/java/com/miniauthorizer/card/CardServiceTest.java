@@ -1,13 +1,12 @@
 package com.miniauthorizer.card;
 
+import com.miniauthorizer.support.TestPins;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.security.crypto.factory.PasswordEncoderFactories;
-import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.Optional;
 
@@ -23,13 +22,11 @@ class CardServiceTest {
     private static final String NUMBER = "6549873025634501";
     private static final String PIN = "1234";
 
-    private final PasswordEncoder passwordEncoder = PasswordEncoderFactories.createDelegatingPasswordEncoder();
-
     @Mock
     private CardRepository repository;
 
     private CardService service() {
-        return new CardService(repository, passwordEncoder);
+        return new CardService(repository, TestPins.HASHER);
     }
 
     @Test
@@ -44,7 +41,7 @@ class CardServiceTest {
         assertThat(saved.getValue().getNumber()).isEqualTo(NUMBER);
         assertThat(saved.getValue().getBalance()).isEqualByComparingTo("500.00");
         assertThat(saved.getValue().getPinHash()).doesNotContain(PIN).startsWith("{bcrypt}");
-        assertThat(passwordEncoder.matches(PIN, saved.getValue().getPinHash())).isTrue();
+        assertThat(TestPins.HASHER.matches(NUMBER, PIN, saved.getValue().getPinHash())).isTrue();
     }
 
     @Test

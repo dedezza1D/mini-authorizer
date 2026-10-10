@@ -1,9 +1,8 @@
 package com.miniauthorizer.transaction;
 
 import com.miniauthorizer.card.Card;
+import com.miniauthorizer.support.TestPins;
 import org.junit.jupiter.api.Test;
-import org.springframework.security.crypto.factory.PasswordEncoderFactories;
-import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.math.BigDecimal;
 
@@ -13,10 +12,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class AuthorizationRulesTest {
 
-    private static final PasswordEncoder ENCODER = PasswordEncoderFactories.createDelegatingPasswordEncoder();
-    private static final Card CARD = Card.issue("6549873025634501", ENCODER.encode("1234"));
+    private static final Card CARD = Card.issue("6549873025634501", TestPins.HASHER.hash("6549873025634501", "1234"));
 
-    private final PinMatchesRule pinMatches = new PinMatchesRule(ENCODER);
+    private final PinMatchesRule pinMatches = new PinMatchesRule(TestPins.HASHER);
     private final SufficientBalanceRule sufficientBalance = new SufficientBalanceRule();
 
     @Test

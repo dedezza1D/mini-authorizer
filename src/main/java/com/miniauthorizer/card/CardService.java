@@ -1,7 +1,6 @@
 package com.miniauthorizer.card;
 
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -11,11 +10,11 @@ import java.util.Optional;
 public class CardService {
 
     private final CardRepository repository;
-    private final PasswordEncoder passwordEncoder;
+    private final PinHasher pinHasher;
 
-    public CardService(CardRepository repository, PasswordEncoder passwordEncoder) {
+    public CardService(CardRepository repository, PinHasher pinHasher) {
         this.repository = repository;
-        this.passwordEncoder = passwordEncoder;
+        this.pinHasher = pinHasher;
     }
 
     public CardIssuance issue(String number, String pin) {
@@ -32,7 +31,7 @@ public class CardService {
     // decides which one wins and the other is reported as an existing card.
     private CardIssuance persist(String number, String pin) {
         try {
-            repository.saveAndFlush(Card.issue(number, passwordEncoder.encode(pin)));
+            repository.saveAndFlush(Card.issue(number, pinHasher.hash(number, pin)));
             return CardIssuance.CREATED;
         } catch (DataIntegrityViolationException concurrentInsert) {
             return CardIssuance.ALREADY_EXISTS;

@@ -2,12 +2,11 @@ package com.miniauthorizer.transaction;
 
 import com.miniauthorizer.card.Card;
 import com.miniauthorizer.card.CardRepository;
+import com.miniauthorizer.support.TestPins;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.security.crypto.factory.PasswordEncoderFactories;
-import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -24,9 +23,8 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class TransactionAuthorizerTest {
 
-    private static final PasswordEncoder ENCODER = PasswordEncoderFactories.createDelegatingPasswordEncoder();
     private static final String NUMBER = "6549873025634501";
-    private static final String PIN_HASH = ENCODER.encode("1234");
+    private static final String PIN_HASH = TestPins.HASHER.hash(NUMBER, "1234");
     private static final BigDecimal TEN = new BigDecimal("10.00");
 
     @Mock
@@ -34,7 +32,7 @@ class TransactionAuthorizerTest {
 
     private TransactionAuthorizer authorizer() {
         return new TransactionAuthorizer(cardRepository,
-                List.of(new PinMatchesRule(ENCODER), new SufficientBalanceRule()));
+                List.of(new PinMatchesRule(TestPins.HASHER), new SufficientBalanceRule()));
     }
 
     @Test
