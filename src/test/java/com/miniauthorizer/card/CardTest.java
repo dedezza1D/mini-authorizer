@@ -7,7 +7,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import java.math.BigDecimal;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 class CardTest {
@@ -35,25 +34,6 @@ class CardTest {
         assertThat(card.canAfford(new BigDecimal("499.99"))).isTrue();
         assertThat(card.canAfford(new BigDecimal("500.00"))).isTrue();
         assertThat(card.canAfford(new BigDecimal("500.01"))).isFalse();
-    }
-
-    @Test
-    void debitSubtractsTheAmountFromTheBalance() {
-        Card card = Card.issue(NUMBER, "hash");
-
-        card.debit(new BigDecimal("4.85"));
-
-        assertThat(card.getBalance()).isEqualByComparingTo("495.15");
-    }
-
-    @Test
-    void debitCanEmptyTheBalanceButNeverMakeItNegative() {
-        Card card = Card.issue(NUMBER, "hash");
-        card.debit(new BigDecimal("500.00"));
-
-        assertThat(card.getBalance()).isEqualByComparingTo("0.00");
-        assertThatIllegalStateException().isThrownBy(() -> card.debit(new BigDecimal("0.01")));
-        assertThat(card.getBalance()).isEqualByComparingTo("0.00");
     }
 
     @Test

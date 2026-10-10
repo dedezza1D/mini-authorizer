@@ -14,7 +14,11 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -23,6 +27,7 @@ class TransactionAuthorizerTest {
     private static final PasswordEncoder ENCODER = PasswordEncoderFactories.createDelegatingPasswordEncoder();
     private static final String NUMBER = "6549873025634501";
     private static final String PIN_HASH = ENCODER.encode("1234");
+    private static final BigDecimal TEN = new BigDecimal("10.00");
 
     @Mock
     private CardRepository cardRepository;
@@ -34,34 +39,44 @@ class TransactionAuthorizerTest {
 
     @Test
     void debitsTheCardWhenEveryRuleAllows() {
-        Card card = existingCard();
+        existingCard();
+        when(cardRepository.debitIfAffordable(NUMBER, TEN)).thenReturn(1);
 
-        authorizer().authorize(new Transaction(NUMBER, "1234", new BigDecimal("10.00")));
+        assertThatCode(() -> authorizer().authorize(new Transaction(NUMBER, "1234", TEN)))
+                .doesNotThrowAnyException();
+        verify(cardRepository).debitIfAffordable(NUMBER, TEN);
+    }
 
-        assertThat(card.getBalance()).isEqualByComparingTo("490.00");
+    @Test
+    void rejectsWhenAConcurrentTransactionSpentTheBalanceAfterTheRulesPassed() {
+        existingCard();
+        when(cardRepository.debitIfAffordable(NUMBER, TEN)).thenReturn(0);
+
+        assertRejected(new Transaction(NUMBER, "1234", TEN), RejectionReason.INSUFFICIENT_BALANCE);
     }
 
     @Test
     void rejectsUnknownCard() {
         when(cardRepository.findById(NUMBER)).thenReturn(Optional.empty());
 
-        assertRejected(new Transaction(NUMBER, "1234", BigDecimal.TEN), RejectionReason.CARD_NOT_FOUND);
+        assertRejected(new Transaction(NUMBER, "1234", TEN), RejectionReason.CARD_NOT_FOUND);
+        verify(cardRepository, never()).debitIfAffordable(any(), any());
     }
 
     @Test
-    void rejectsWrongPinWithoutTouchingTheBalance() {
-        Card card = existingCard();
+    void rejectsWrongPinWithoutDebiting() {
+        existingCard();
 
-        assertRejected(new Transaction(NUMBER, "9999", BigDecimal.TEN), RejectionReason.INVALID_PIN);
-        assertThat(card.getBalance()).isEqualByComparingTo("500.00");
+        assertRejected(new Transaction(NUMBER, "9999", TEN), RejectionReason.INVALID_PIN);
+        verify(cardRepository, never()).debitIfAffordable(any(), any());
     }
 
     @Test
-    void rejectsAmountAboveTheBalanceWithoutTouchingIt() {
-        Card card = existingCard();
+    void rejectsAmountAboveTheBalanceWithoutDebiting() {
+        existingCard();
 
         assertRejected(new Transaction(NUMBER, "1234", new BigDecimal("500.01")), RejectionReason.INSUFFICIENT_BALANCE);
-        assertThat(card.getBalance()).isEqualByComparingTo("500.00");
+        verify(cardRepository, never()).debitIfAffordable(any(), any());
     }
 
     @Test
@@ -71,10 +86,8 @@ class TransactionAuthorizerTest {
         assertRejected(new Transaction(NUMBER, "9999", new BigDecimal("999.00")), RejectionReason.INVALID_PIN);
     }
 
-    private Card existingCard() {
-        Card card = Card.issue(NUMBER, PIN_HASH);
-        when(cardRepository.findById(NUMBER)).thenReturn(Optional.of(card));
-        return card;
+    private void existingCard() {
+        when(cardRepository.findById(NUMBER)).thenReturn(Optional.of(Card.issue(NUMBER, PIN_HASH)));
     }
 
     private void assertRejected(Transaction transaction, RejectionReason reason) {
