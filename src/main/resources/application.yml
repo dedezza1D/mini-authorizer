@@ -45,6 +45,10 @@ app:
       issuer: mini-authorizer
       audience: mini-authorizer
       time-to-live: 5m
+    # Per client and per instance; the global limit per client is the API gateway's job.
+    rate-limit:
+      requests-per-second: 100
+      burst: 200
 
   idempotency:
     retention: P7D

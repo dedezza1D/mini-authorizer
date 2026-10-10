@@ -12,9 +12,10 @@ import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.access.intercept.AuthorizationFilter;
 
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties(ApiSecurityProperties.class)
+@EnableConfigurationProperties({ApiSecurityProperties.class, RateLimitProperties.class})
 public class SecurityConfig {
 
     static final String BASIC_AUTHORITY = "ROLE_" + ApiUser.ROLE;
@@ -24,7 +25,8 @@ public class SecurityConfig {
     static final String CERTIFICATE_USERNAME = "CN=(.*?)(?:,|$)";
 
     @Bean
-    public SecurityFilterChain apiSecurity(HttpSecurity http, UserDetailsService apiUsers) throws Exception {
+    public SecurityFilterChain apiSecurity(HttpSecurity http, UserDetailsService apiUsers,
+                                           RateLimitProperties rateLimits) throws Exception {
         AuthenticationEntryPoint entryPoint = new ApiAuthenticationEntryPoint();
 
         return http
@@ -49,6 +51,9 @@ public class SecurityConfig {
                         // Only the client's own credentials can obtain a token, never another token.
                         .requestMatchers(HttpMethod.POST, "/oauth2/token").hasRole(ApiUser.ROLE)
                         .anyRequest().hasAnyAuthority(BASIC_AUTHORITY, TOKEN_AUTHORITY))
+                // Created here rather than as a bean, so Spring Boot does not also register it as a
+                // servlet filter running before authentication.
+                .addFilterAfter(new ClientRateLimitFilter(rateLimits), AuthorizationFilter.class)
                 .build();
     }
 }
