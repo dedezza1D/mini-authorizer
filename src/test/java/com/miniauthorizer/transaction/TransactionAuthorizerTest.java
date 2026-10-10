@@ -2,6 +2,7 @@ package com.miniauthorizer.transaction;
 
 import com.miniauthorizer.card.Card;
 import com.miniauthorizer.card.CardRepository;
+import com.miniauthorizer.card.PinAttempts;
 import com.miniauthorizer.support.TestPins;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -30,9 +31,12 @@ class TransactionAuthorizerTest {
     @Mock
     private CardRepository cardRepository;
 
+    @Mock
+    private PinAttempts pinAttempts;
+
     private TransactionAuthorizer authorizer() {
         return new TransactionAuthorizer(cardRepository,
-                List.of(new PinMatchesRule(TestPins.HASHER), new SufficientBalanceRule()));
+                List.of(new PinMatchesRule(TestPins.HASHER, pinAttempts), new SufficientBalanceRule()));
     }
 
     @Test

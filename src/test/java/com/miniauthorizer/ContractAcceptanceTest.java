@@ -97,6 +97,19 @@ class ContractAcceptanceTest extends MySqlIntegrationTest {
         assertThat(api.getForEntity("/cartoes/" + card, String.class).getBody()).isEqualTo("490.00");
     }
 
+    @Test
+    void blocksACardAfterThreeWrongPins() {
+        TestRestTemplate api = anonymous.withBasicAuth("username", "password");
+        String card = "5555666677778888";
+        api.postForEntity("/cartoes", Map.of("numeroCartao", card, "senha", PIN), String.class);
+
+        assertRejected(transaction(api, card, "0000", BigDecimal.ONE), "SENHA_INVALIDA");
+        assertRejected(transaction(api, card, "1111", BigDecimal.ONE), "SENHA_INVALIDA");
+        assertRejected(transaction(api, card, "2222", BigDecimal.ONE), "SENHA_INVALIDA");
+
+        assertRejected(transaction(api, card, PIN, BigDecimal.ONE), "CARTAO_BLOQUEADO");
+    }
+
     private static String balance(TestRestTemplate api) {
         ResponseEntity<String> response = api.getForEntity("/cartoes/" + CARD, String.class);
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);

@@ -7,6 +7,7 @@ package com.miniauthorizer.transaction;
 public enum RejectionReason {
 
     CARD_NOT_FOUND("CARTAO_INEXISTENTE"),
+    CARD_BLOCKED("CARTAO_BLOQUEADO"),
     INVALID_PIN("SENHA_INVALIDA"),
     INSUFFICIENT_BALANCE("SALDO_INSUFICIENTE");
 

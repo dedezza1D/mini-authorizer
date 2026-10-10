@@ -7,3 +7,5 @@ databaseChangeLog:
       file: db/changelog/003-add-api-user-lockout.sql
   - include:
       file: db/changelog/004-create-processed-transaction-table.sql
+  - include:
+      file: db/changelog/005-add-card-pin-lockout.sql

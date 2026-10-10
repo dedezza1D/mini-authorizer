@@ -50,6 +50,12 @@ app:
       requests-per-second: 100
       burst: 200
 
+  cards:
+    # Wrong PINs within the window that block the card, for the same window.
+    pin-lockout:
+      max-attempts: 3
+      window: 30m
+
   idempotency:
     retention: P7D
     cleanup-interval: PT1H

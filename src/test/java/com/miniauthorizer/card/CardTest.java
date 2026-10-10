@@ -3,7 +3,10 @@ package com.miniauthorizer.card;
 import com.miniauthorizer.support.TestPins;
 import org.junit.jupiter.api.Test;
 
+import org.springframework.test.util.ReflectionTestUtils;
+
 import java.math.BigDecimal;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
@@ -41,5 +44,31 @@ class CardTest {
 
         assertThat(card.pinMatches("1234", TestPins.HASHER)).isTrue();
         assertThat(card.pinMatches("4321", TestPins.HASHER)).isFalse();
+    }
+
+    @Test
+    void newCardIsNeitherBlockedNorCarryingMistakes() {
+        Card card = Card.issue(NUMBER, "hash");
+
+        assertThat(card.isBlockedAt(Instant.now())).isFalse();
+        assertThat(card.hasFailedPinAttempts()).isFalse();
+    }
+
+    @Test
+    void isBlockedOnlyUntilTheBlockExpires() {
+        Instant until = Instant.parse("2026-01-15T10:30:00Z");
+        Card card = Card.issue(NUMBER, "hash");
+        ReflectionTestUtils.setField(card, "blockedUntil", until);
+
+        assertThat(card.isBlockedAt(until.minusMillis(1))).isTrue();
+        assertThat(card.isBlockedAt(until)).isFalse();
+    }
+
+    @Test
+    void remembersWrongPins() {
+        Card card = Card.issue(NUMBER, "hash");
+        ReflectionTestUtils.setField(card, "failedPinAttempts", 1);
+
+        assertThat(card.hasFailedPinAttempts()).isTrue();
     }
 }

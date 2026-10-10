@@ -14,9 +14,20 @@ public interface AuthorizationRule {
 
     RejectionReason rejectionReason();
 
+    /** Reaction to a transaction this rule allowed. Does nothing unless the rule needs it. */
+    default void onAllowed(Card card, Transaction transaction) {
+    }
+
+    /** Reaction to a transaction this rule refused, before the refusal is reported. */
+    default void onRejected(Card card, Transaction transaction) {
+    }
+
     default void check(Card card, Transaction transaction) {
         Optional.of(card)
                 .filter(candidate -> allows(candidate, transaction))
-                .orElseThrow(() -> new TransactionRejectedException(rejectionReason()));
+                .ifPresentOrElse(allowed -> onAllowed(allowed, transaction), () -> {
+                    onRejected(card, transaction);
+                    throw new TransactionRejectedException(rejectionReason());
+                });
     }
 }

@@ -7,7 +7,9 @@ import jakarta.persistence.Table;
 import jakarta.persistence.Version;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.Objects;
+import java.util.Optional;
 
 @Entity
 @Table(name = "card")
@@ -24,6 +26,17 @@ public class Card {
 
     @Column(name = "balance", nullable = false)
     private BigDecimal balance;
+
+    // The PIN lockout fields are written only through conditional UPDATEs in CardRepository, so
+    // wrong PINs sent to several instances at once are all counted.
+    @Column(name = "failed_pin_attempts", nullable = false)
+    private int failedPinAttempts;
+
+    @Column(name = "pin_window_started_at")
+    private Instant pinWindowStartedAt;
+
+    @Column(name = "blocked_until")
+    private Instant blockedUntil;
 
     // A null version marks the entity as new: with an application-assigned id, Spring Data
     // then calls persist instead of merge, so a duplicate number fails on the primary key
@@ -51,6 +64,14 @@ public class Card {
 
     public boolean canAfford(BigDecimal amount) {
         return balance.compareTo(amount) >= 0;
+    }
+
+    public boolean isBlockedAt(Instant instant) {
+        return Optional.ofNullable(blockedUntil).filter(instant::isBefore).isPresent();
+    }
+
+    public boolean hasFailedPinAttempts() {
+        return failedPinAttempts > 0;
     }
 
     public String getNumber() {
