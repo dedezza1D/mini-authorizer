@@ -4,6 +4,7 @@ import com.miniauthorizer.config.ClockConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -23,8 +24,13 @@ class TokenConfigTest {
     }
 
     @Test
-    void fallsBackToAnEphemeralKeyWhenNoneIsConfigured() {
-        context.run(started -> assertThat(started).hasSingleBean(TokenKeys.class).hasSingleBean(TokenIssuer.class));
+    void issuesAndAcceptsTokensWithAnEphemeralKeyWhenNoneIsConfigured() {
+        context.run(started -> {
+            String token = started.getBean(TokenIssuer.class).issueFor("terminal").value();
+
+            assertThat(started.getBean(JwtDecoder.class).decode(token).getSubject())
+                    .isEqualTo("terminal");
+        });
     }
 
     @Test

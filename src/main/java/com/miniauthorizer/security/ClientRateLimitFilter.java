@@ -2,7 +2,6 @@ package com.miniauthorizer.security;
 
 import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
-import io.github.bucket4j.ConsumptionProbe;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -21,7 +20,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Token bucket per authenticated API client, so one misbehaving client (a retry storm, a bug,
@@ -36,6 +34,9 @@ public class ClientRateLimitFilter extends OncePerRequestFilter {
 
     private static final Map<Boolean, Decision> DECISIONS = Map.of(true, Decision.ALLOW, false, Decision.THROTTLE);
 
+    // The bucket refills at least one request per second, so one second is always enough to retry.
+    private static final String RETRY_AFTER_SECONDS = "1";
+
     private final ConcurrentMap<String, Bucket> buckets = new ConcurrentHashMap<>();
     private final RateLimitProperties limits;
 
@@ -46,16 +47,14 @@ public class ClientRateLimitFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
-        Optional<ConsumptionProbe> probe = Optional.ofNullable(SecurityContextHolder.getContext().getAuthentication())
+        Optional.ofNullable(SecurityContextHolder.getContext().getAuthentication())
                 .filter(Authentication::isAuthenticated)
                 .filter(authentication -> !(authentication instanceof AnonymousAuthenticationToken))
                 .map(client -> buckets.computeIfAbsent(client.getName(), name -> newBucket()))
-                .map(bucket -> bucket.tryConsumeAndReturnRemaining(1));
-
-        probe.map(ConsumptionProbe::isConsumed)
+                .map(bucket -> bucket.tryConsume(1))
                 .map(DECISIONS::get)
                 .orElse(Decision.ALLOW)
-                .apply(request, response, chain, probe);
+                .apply(request, response, chain);
     }
 
     private Bucket newBucket() {
@@ -71,28 +70,24 @@ public class ClientRateLimitFilter extends OncePerRequestFilter {
 
         ALLOW {
             @Override
-            void apply(HttpServletRequest request, HttpServletResponse response, FilterChain chain,
-                       Optional<ConsumptionProbe> probe) throws ServletException, IOException {
+            void apply(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+                    throws ServletException, IOException {
                 chain.doFilter(request, response);
             }
         },
 
         THROTTLE {
             @Override
-            void apply(HttpServletRequest request, HttpServletResponse response, FilterChain chain,
-                       Optional<ConsumptionProbe> probe) throws IOException {
-                long waitSeconds = probe.map(ConsumptionProbe::getNanosToWaitForRefill)
-                        .map(nanos -> Math.max(1, TimeUnit.NANOSECONDS.toSeconds(nanos + 999_999_999)))
-                        .orElse(1L);
+            void apply(HttpServletRequest request, HttpServletResponse response, FilterChain chain) throws IOException {
                 response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
-                response.setHeader(HttpHeaders.RETRY_AFTER, String.valueOf(waitSeconds));
+                response.setHeader(HttpHeaders.RETRY_AFTER, RETRY_AFTER_SECONDS);
                 response.setContentType(MediaType.APPLICATION_PROBLEM_JSON_VALUE);
                 response.getWriter().write("{\"title\":\"Too Many Requests\",\"status\":429,"
                         + "\"detail\":\"Request rate limit exceeded for this client\"}");
             }
         };
 
-        abstract void apply(HttpServletRequest request, HttpServletResponse response, FilterChain chain,
-                            Optional<ConsumptionProbe> probe) throws ServletException, IOException;
+        abstract void apply(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+                throws ServletException, IOException;
     }
 }
