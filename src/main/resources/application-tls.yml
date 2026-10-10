@@ -5,6 +5,9 @@ server:
   ssl:
     enabled: true
     bundle: server
+    # mTLS: a client may present a certificate issued by the trusted client CA, and its CN is the
+    # API username. "want" keeps Basic and bearer clients working without a certificate.
+    client-auth: want
 
 spring:
   ssl:
@@ -16,6 +19,8 @@ spring:
           keystore:
             certificate: ${TLS_CERTIFICATE:file:certs/server.crt}
             private-key: ${TLS_PRIVATE_KEY:file:certs/server.key}
+          truststore:
+            certificate: ${TLS_CLIENT_CA:file:certs/client-ca.crt}
           # With an SSL bundle, protocols and ciphers must be set here: server.ssl.ciphers and
           # server.ssl.enabled-protocols are ignored.
           options:
