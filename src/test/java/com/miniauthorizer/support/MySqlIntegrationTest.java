@@ -11,9 +11,12 @@ import org.testcontainers.containers.MySQLContainer;
 @Tag("integration")
 public abstract class MySqlIntegrationTest {
 
+    // Same TLS requirement as the application's default datasource URL.
     @ServiceConnection
     static final MySQLContainer<?> MYSQL = new MySQLContainer<>("mysql:5.7")
-            .withDatabaseName("miniautorizador");
+            .withDatabaseName("miniautorizador")
+            .withUrlParam("sslMode", "REQUIRED")
+            .withUrlParam("tlsVersions", "TLSv1.2");
 
     static {
         MYSQL.start();
