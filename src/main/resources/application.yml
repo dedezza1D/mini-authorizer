@@ -39,6 +39,12 @@ app:
     # Base64 secret of at least 32 bytes mixed into every PIN hash. This value is for local use
     # only and is public; real environments set PIN_PEPPER from a secret manager.
     pin-pepper: ${PIN_PEPPER:XscXnNomhBPzKdr32g5yzev4iYv7SkDW2ud36CCzyBE=}
+    # OAuth2 client credentials. Without signing-key/verification-key (PEM resources such as
+    # file:keys/token-signing.pem) an ephemeral key is generated, valid on this instance only.
+    tokens:
+      issuer: mini-authorizer
+      audience: mini-authorizer
+      time-to-live: 5m
 
   idempotency:
     retention: P7D

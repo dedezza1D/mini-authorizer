@@ -3,6 +3,7 @@ package com.miniauthorizer.security;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.authentication.event.AuthenticationFailureBadCredentialsEvent;
 import org.springframework.security.authentication.event.AuthenticationSuccessEvent;
 import org.springframework.stereotype.Component;
@@ -49,6 +50,9 @@ public class LoginAttempts {
     @EventListener
     @Transactional
     public void onSuccessfulLogin(AuthenticationSuccessEvent event) {
-        repository.resetFailedAttempts(event.getAuthentication().getName());
+        // Only a password login can follow failed attempts; bearer tokens must not cost a write per request.
+        Optional.of(event.getAuthentication())
+                .filter(UsernamePasswordAuthenticationToken.class::isInstance)
+                .ifPresent(login -> repository.resetFailedAttempts(login.getName()));
     }
 }

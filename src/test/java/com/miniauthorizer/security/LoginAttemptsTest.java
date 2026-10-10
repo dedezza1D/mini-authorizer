@@ -9,6 +9,7 @@ import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.TestingAuthenticationToken;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.authentication.event.AuthenticationFailureBadCredentialsEvent;
 import org.springframework.security.authentication.event.AuthenticationSuccessEvent;
 
@@ -16,6 +17,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -23,6 +25,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
@@ -72,10 +75,18 @@ class LoginAttemptsTest {
     @Test
     void startsTheCountOverAfterASuccessfulLogin() {
         loginAttempts().onSuccessfulLogin(new AuthenticationSuccessEvent(
-                new TestingAuthenticationToken("terminal", "password")));
+                UsernamePasswordAuthenticationToken.authenticated("terminal", "password", List.of())));
 
         verify(repository).resetFailedAttempts("terminal");
         verifyNoMoreInteractions(repository);
+    }
+
+    @Test
+    void doesNotTouchTheDatabaseWhenTheClientUsedABearerToken() {
+        loginAttempts().onSuccessfulLogin(new AuthenticationSuccessEvent(
+                new TestingAuthenticationToken("terminal", "eyJ.token")));
+
+        verifyNoInteractions(repository);
     }
 
     private static AuthenticationFailureBadCredentialsEvent wrongPassword() {

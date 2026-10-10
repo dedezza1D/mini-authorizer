@@ -5,6 +5,11 @@ app:
       username: ${API_USERNAME}
       password: ${API_PASSWORD}
     pin-pepper: ${PIN_PEPPER}
+    # Every instance must sign and verify with the same key pair, or a token issued by one
+    # instance is refused by the others.
+    tokens:
+      signing-key: ${TOKEN_SIGNING_KEY}
+      verification-key: ${TOKEN_VERIFICATION_KEY}
 
 # Behind a TLS-terminating load balancer, trust its X-Forwarded-* headers so the request is seen as
 # HTTPS: Spring Security then sends HSTS and generated URLs use https. Only safe when the
