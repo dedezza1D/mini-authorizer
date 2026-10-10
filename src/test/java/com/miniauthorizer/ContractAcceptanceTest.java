@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -73,6 +75,26 @@ class ContractAcceptanceTest extends MySqlIntegrationTest {
                 .getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         assertThat(transaction(anonymous, CARD, PIN, BigDecimal.ONE)
                 .getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    @Test
+    void answersARetriedTransactionWithoutDebitingItTwice() {
+        TestRestTemplate api = anonymous.withBasicAuth("username", "password");
+        String card = "4111111111111111";
+        api.postForEntity("/cartoes", Map.of("numeroCartao", card, "senha", PIN), String.class);
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("Idempotency-Key", "nsu-000001");
+        HttpEntity<Map<String, Object>> retriedTransaction = new HttpEntity<>(
+                Map.of("numeroCartao", card, "senhaCartao", PIN, "valor", new BigDecimal("10.00")), headers);
+
+        for (int attempt = 0; attempt < 3; attempt++) {
+            ResponseEntity<String> response = api.postForEntity("/transacoes", retriedTransaction, String.class);
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+            assertThat(response.getBody()).isEqualTo("OK");
+        }
+
+        assertThat(api.getForEntity("/cartoes/" + card, String.class).getBody()).isEqualTo("490.00");
     }
 
     private static String balance(TestRestTemplate api) {

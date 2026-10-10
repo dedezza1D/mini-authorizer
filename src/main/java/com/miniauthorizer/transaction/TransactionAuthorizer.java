@@ -34,7 +34,8 @@ public class TransactionAuthorizer {
      *
      * @throws TransactionRejectedException with the first rule that refused it
      */
-    @Transactional
+    // A rejection writes nothing, and must not doom a surrounding transaction that records it.
+    @Transactional(noRollbackFor = TransactionRejectedException.class)
     public void authorize(Transaction transaction) {
         Card card = cardRepository.findById(transaction.cardNumber())
                 .orElseThrow(() -> new TransactionRejectedException(RejectionReason.CARD_NOT_FOUND));

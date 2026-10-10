@@ -41,6 +41,62 @@ class TransactionControllerTest {
     @MockitoBean
     private TransactionAuthorizer authorizer;
 
+    @MockitoBean
+    private IdempotentTransactionAuthorizer idempotentAuthorizer;
+
+    @Test
+    void usesTheIdempotentFlowScopedToTheCallerWhenAKeyIsSent() throws Exception {
+        mvc.perform(post("/transacoes").contentType(MediaType.APPLICATION_JSON).header("Idempotency-Key", "nsu-000123")
+                        .content(TRANSACTION))
+                .andExpect(status().isCreated())
+                .andExpect(content().string("OK"));
+
+        verify(idempotentAuthorizer).authorize("user", new IdempotencyKey("nsu-000123"),
+                new Transaction("6549873025634501", "1234", new BigDecimal("10.00")));
+        verifyNoInteractions(authorizer);
+    }
+
+    @Test
+    void keepsTheOriginalFlowWhenNoKeyIsSent() throws Exception {
+        mvc.perform(post("/transacoes").contentType(MediaType.APPLICATION_JSON).content(TRANSACTION))
+                .andExpect(status().isCreated());
+
+        verifyNoInteractions(idempotentAuthorizer);
+    }
+
+    @Test
+    void answersARepeatedRejectionLikeTheFirstOne() throws Exception {
+        doThrow(new TransactionRejectedException(RejectionReason.INSUFFICIENT_BALANCE))
+                .when(idempotentAuthorizer).authorize(any(), any(), any());
+
+        mvc.perform(post("/transacoes").contentType(MediaType.APPLICATION_JSON).header("Idempotency-Key", "nsu-000123")
+                        .content(TRANSACTION))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(content().string("SALDO_INSUFICIENTE"));
+    }
+
+    @Test
+    void rejectsMalformedIdempotencyKeys() throws Exception {
+        mvc.perform(post("/transacoes").contentType(MediaType.APPLICATION_JSON).header("Idempotency-Key", "nsu 123")
+                        .content(TRANSACTION))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.detail").value("Idempotency-Key must have 1 to 64 letters, digits, '-' or '_'"));
+
+        verifyNoInteractions(authorizer, idempotentAuthorizer);
+    }
+
+    @Test
+    void answersConflictWhenAKeyIsReusedForAnotherTransaction() throws Exception {
+        doThrow(new IdempotencyKeyReusedException()).when(idempotentAuthorizer).authorize(any(), any(), any());
+
+        mvc.perform(post("/transacoes").contentType(MediaType.APPLICATION_JSON).header("Idempotency-Key", "nsu-000123")
+                        .content(TRANSACTION))
+                .andExpect(status().isConflict())
+                .andExpect(content().contentType(MediaType.APPLICATION_PROBLEM_JSON))
+                .andExpect(jsonPath("$.detail").value("Idempotency-Key was already used for a different transaction"));
+    }
+
     @Test
     void answersCreatedWithOkWhenAuthorized() throws Exception {
         mvc.perform(post("/transacoes").contentType(MediaType.APPLICATION_JSON).content(TRANSACTION))
