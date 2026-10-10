@@ -1,0 +1,12 @@
+spring:
+  application:
+    name: mini-authorizer
+
+server:
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
