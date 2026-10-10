@@ -15,6 +15,7 @@ que decide se uma compra feita na maquininha de cartão é aprovada.
 - [Design](#design)
 - [Segurança](#segurança)
 - [Concorrência](#concorrência)
+- [Idempotência](#idempotência)
 - [Testes](#testes)
 - [Suposições](#suposições)
 - [Rumo à produção](#rumo-à-produção)
@@ -31,23 +32,40 @@ docker compose -f docker/docker-compose.yml up -d   # MySQL 5.7 em localhost:330
 O schema é criado pelo Liquibase na subida, e o usuário da API `username` / `password` é criado se
 ainda não existir. Tudo pode ser alterado por variáveis de ambiente:
 
-| Variável | Padrão | Uso |
+| Variável | Padrão local | Uso |
 |---|---|---|
-| `DB_URL` | `jdbc:mysql://localhost:3306/miniautorizador?...` | URL JDBC |
+| `DB_URL` | `jdbc:mysql://localhost:3306/miniautorizador?sslMode=REQUIRED&...` | URL JDBC (sempre com TLS) |
 | `DB_USERNAME` / `DB_PASSWORD` | `root` / vazia | Credenciais do banco |
 | `API_USERNAME` / `API_PASSWORD` | `username` / `password` | Usuário da API criado na subida |
+| `PIN_PEPPER` | valor público, só para uso local | Segredo (Base64, 32+ bytes) das senhas dos cartões |
+| `TLS_CERTIFICATE` / `TLS_PRIVATE_KEY` | `certs/server.crt` / `certs/server.key` | Certificado PEM do perfil `tls` |
 
-Com `SPRING_PROFILES_ACTIVE=prod` não há valores padrão: a aplicação não sobe enquanto todas as
-variáveis acima não forem informadas.
+Com `SPRING_PROFILES_ACTIVE=prod` não há valores padrão: a aplicação não sobe enquanto banco,
+usuário da API e `PIN_PEPPER` não forem informados.
 
-Para rodar como contêiner (a imagem roda com um usuário sem privilégios):
+### HTTPS
+
+O contrato chama `http://localhost:8080`, então o perfil padrão continua em HTTP. Para a aplicação
+servir HTTPS na 8443:
+
+```bash
+./scripts/generate-dev-certificate.sh                     # certificado autoassinado em certs/
+SPRING_PROFILES_ACTIVE=tls ./mvnw spring-boot:run          # API em https://localhost:8443
+curl --cacert certs/server.crt -u username:password https://localhost:8443/cartoes/6549873025634501
+```
+
+### Contêiner
+
+A imagem roda com um usuário sem privilégios:
 
 ```bash
 docker build -t mini-authorizer .
-docker run --rm -p 8080:8080 -e DB_URL="jdbc:mysql://host.docker.internal:3306/miniautorizador?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC" mini-authorizer
+docker run --rm -p 8080:8080 -e DB_URL="jdbc:mysql://host.docker.internal:3306/miniautorizador?sslMode=REQUIRED&tlsVersions=TLSv1.2&serverTimezone=UTC" mini-authorizer
 ```
 
-Testes (com o Docker rodando, porque o Testcontainers sobe o próprio MySQL 5.7):
+### Testes
+
+Com o Docker rodando, porque o Testcontainers sobe o próprio MySQL 5.7:
 
 ```bash
 ./mvnw verify                                                 # todos os testes + limite de cobertura
@@ -92,9 +110,12 @@ curl -i -u username:password http://localhost:8080/cartoes/6549873025634501
 
 ```bash
 curl -i -u username:password -H 'Content-Type: application/json' \
+     -H 'Idempotency-Key: nsu-000123' \
      -d '{"numeroCartao": "6549873025634501", "senhaCartao": "1234", "valor": 10.00}' \
      http://localhost:8080/transacoes
 ```
+
+O header `Idempotency-Key` é opcional (veja [Idempotência](#idempotência)).
 
 | Resultado | Status | Corpo (text/plain) |
 |---|---|---|
@@ -102,7 +123,8 @@ curl -i -u username:password -H 'Content-Type: application/json' \
 | Cartão inexistente | `422` | `CARTAO_INEXISTENTE` |
 | Senha errada | `422` | `SENHA_INVALIDA` |
 | Saldo insuficiente | `422` | `SALDO_INSUFICIENTE` |
-| Dados inválidos | `400` | problem details com cada campo inválido |
+| Dados ou `Idempotency-Key` inválidos | `400` | problem details |
+| `Idempotency-Key` já usada em outra transação | `409` | problem details |
 | Sem autenticação | `401` | vazio |
 
 ## Design
@@ -111,8 +133,8 @@ O código é organizado por funcionalidade (`card`, `transaction`, `security`), 
 cada pacote reúne tudo sobre um conceito e expõe só o que os outros precisam.
 
 ```
-card/         entidade Card, emissão, consulta de saldo, débito atômico
-transaction/  regras de autorização, serviço autorizador, endpoint
+card/         entidade Card, emissão, consulta de saldo, débito atômico, hashing da senha
+transaction/  regras de autorização, autorizador, idempotência, endpoint
 security/     usuários da API, autenticação Basic, bloqueio por tentativas
 web/          problem details para erros de validação
 ```
@@ -140,14 +162,16 @@ A regra de senha roda antes da de saldo, então uma senha errada num cartão zer
 `SENHA_INVALIDA`: sem a senha certa, quem chama não descobre nada sobre o saldo.
 
 **Nenhum `if`.** O desafio opcional foi cumprido em todo o `src/main`. As decisões são expressas
-com polimorfismo (as regras), `Optional` (`orElseThrow`, `filter`, `map`) e mapas de enum para
-resultado (resultado da emissão para status HTTP), sem ternários disfarçados. A recusa é uma
-exceção de domínio convertida no `422` em um único lugar.
+com polimorfismo (as regras), `Optional` (`orElseThrow`, `filter`, `map`, `ifPresentOrElse`) e mapas
+de enum para resultado (resultado da emissão para status HTTP), sem ternários disfarçados. A recusa
+é uma exceção de domínio convertida no `422` em um único lugar.
 
 **Domínio rico, controllers finos.** O `Card` conhece o saldo inicial, sabe se comporta um valor e
-se uma senha confere com o hash, sem nunca expor o hash. Os controllers só traduzem entre HTTP e
-domínio. Os records de requisição e resposta usam os nomes de campo do contrato; o domínio usa
-nomes em inglês.
+se uma senha confere, sem nunca expor o hash. Os controllers só traduzem entre HTTP e domínio. Os
+records de requisição e resposta usam os nomes de campo do contrato; o domínio usa nomes em inglês.
+
+**Portas para o que muda com o ambiente.** O hashing da senha do cartão fica atrás da interface
+`PinHasher`: hoje é software com pepper, numa bandeira real seria um HSM, sem mudar o domínio.
 
 **Erros.** Falhas de validação respondem com problem details
 ([RFC 9457](https://www.rfc-editor.org/rfc/rfc9457)) e um mapa `errors` por campo. Número do cartão
@@ -166,7 +190,18 @@ as entidades.
 
 ## Segurança
 
-O contrato exige HTTP Basic, então o trabalho foi deixar o Basic seguro para rodar:
+**Transporte.**
+
+- *API:* o perfil `tls` serve HTTPS aceitando só TLS 1.3 e 1.2, e no 1.2 apenas suítes com forward
+  secrecy e criptografia autenticada (ECDHE + GCM/ChaCha20). O certificado PEM é recarregado sem
+  restart quando renovado (cert-manager, certbot). No perfil `prod`, o TLS é terminado no load
+  balancer: os headers `X-Forwarded-*` passam a valer, a requisição é vista como HTTPS e o Spring
+  Security envia HSTS.
+- *Banco:* a conexão com o MySQL exige TLS (`sslMode=REQUIRED`, TLS 1.2, o máximo do 5.7): sem TLS
+  no servidor, a conexão falha em vez de cair para texto puro. Em produção, `VERIFY_IDENTITY` com a
+  CA do banco valida também o certificado do servidor.
+
+**Autenticação.** O contrato exige HTTP Basic, então o trabalho foi deixar o Basic seguro para rodar:
 
 - **Usuários da API no banco** (`api_user`), com hash BCrypt atrás de um
   `DelegatingPasswordEncoder` (`{bcrypt}...`): o algoritmo ou o custo podem mudar depois sem
@@ -181,10 +216,21 @@ O contrato exige HTTP Basic, então o trabalho foi deixar o Basic seguro para ro
   instâncias; tentativas durante o bloqueio não contam e não o estendem.
 - **Nenhuma credencial no código:** o usuário inicial vem de variáveis de ambiente, a senha nunca
   vai para o log, um usuário existente nunca é sobrescrito e o perfil `prod` não tem padrões.
-- **Senhas dos cartões com hash** BCrypt, nunca em texto puro.
-- **Número do cartão mascarado nos logs** (`654987******4501`), e o `Transaction.toString()` nunca
-  inclui a senha.
 - Só `/actuator/health` e `/actuator/info` são públicos, para o health check do balanceador.
+
+**Senhas dos cartões.** Uma senha de 4 dígitos tem só 10.000 valores possíveis: com o hash BCrypt de
+um dump do banco, a busca offline leva minutos. Por isso o BCrypt é aplicado sobre um HMAC-SHA256
+do número do cartão e da senha, com uma chave secreta (*pepper*) que nunca vai para o banco.
+
+- Sem o pepper, que vem de `PIN_PEPPER` (um gerenciador de segredos em produção), o dump do banco
+  não basta para testar senhas.
+- O número do cartão entra no HMAC, então um hash copiado de um cartão não valida em outro.
+- O pepper precisa ter pelo menos 32 bytes; o perfil `prod` não sobe sem ele.
+- Bandeiras reais vão além: validam a senha num HSM e nunca a veem em texto puro. A interface
+  `PinHasher` é o ponto onde essa implementação entraria.
+
+**Logs.** O número do cartão aparece mascarado (`654987******4501`), e o `Transaction.toString()`
+nunca inclui a senha.
 
 ## Concorrência
 
@@ -215,29 +261,58 @@ e o saldo termina em 0,00.
 A criação de cartão tem o mesmo tipo de corrida (duas requisições para o mesmo número novo): a
 chave primária decide, e a requisição perdedora recebe o `422` de cartão existente.
 
+## Idempotência
+
+Maquininhas reenviam a transação quando a resposta não chega a tempo. Sem proteção, cada reenvio é
+um novo débito. O terminal pode mandar o identificador da transação (o NSU) no header
+`Idempotency-Key`; sem o header, o fluxo do contrato original não muda.
+
+A resposta fica gravada em `processed_transaction`, com chave primária (cliente da API, chave),
+**na mesma transação de banco do débito**:
+
+| Situação | Comportamento |
+|---|---|
+| Reenvio depois que a primeira tentativa terminou | Encontra o registro e devolve a mesma resposta, inclusive uma recusa, sem rodar as regras nem debitar |
+| Reenvio enquanto a primeira tentativa ainda roda | Falha na chave primária ao gravar o registro, o que desfaz o próprio débito, e responde com o que a primeira gravou |
+| Mesma chave com outro cartão ou valor | `409`: não é um reenvio, é outra transação |
+
+As chaves são separadas por cliente da API (duas adquirentes podem ter a mesma numeração), a senha
+não é gravada, e um job remove registros com mais de 7 dias, já que reenvios acontecem em minutos.
+
+Um teste dispara 20 reenvios simultâneos com o mesmo NSU: todos recebem `OK`, e o cartão é
+debitado uma vez só.
+
 ## Testes
 
-São 88 testes, divididos assim:
+São 137 testes, divididos assim:
 
 | Tipo | O que garante | Exemplos |
 |---|---|---|
-| Unidade | Lógica de domínio e cada caminho dos serviços, com BCrypt real em vez de hash simulado | `CardTest`, `AuthorizationRulesTest`, `TransactionAuthorizerTest`, `LoginAttemptsTest` |
-| Fatia web | O contrato exato: status, corpos em texto, eco do JSON, erros de validação, `401` | `CardControllerTest`, `TransactionControllerTest` |
-| Repositório | Queries e constraints contra o MySQL 5.7 real (Testcontainers) | `CardRepositoryTest`, `ApiUserRepositoryTest` |
-| Concorrência | Transações simultâneas em conexões separadas nunca deixam o saldo negativo | `ConcurrentAuthorizationTest` |
-| Segurança | Filtros reais: Basic, usuário desabilitado, bloqueio e expiração, sem sessão | `ApiSecurityTest` |
-| Aceitação | O roteiro de avaliação via HTTP, da criação do cartão a cada recusa | `ContractAcceptanceTest` |
+| Unidade | Lógica de domínio e cada caminho dos serviços, com BCrypt e HMAC reais em vez de hash simulado | `CardTest`, `PepperedPinHasherTest`, `TransactionAuthorizerTest`, `IdempotentTransactionAuthorizerUnitTest` |
+| Fatia web | O contrato exato: status, corpos em texto, eco do JSON, erros de validação, `401`, `409` | `CardControllerTest`, `TransactionControllerTest` |
+| Repositório | Queries e constraints contra o MySQL 5.7 real (Testcontainers), conexão cifrada | `CardRepositoryTest`, `ProcessedTransactionRepositoryTest`, `DatabaseTlsTest` |
+| Concorrência | Transações e reenvios simultâneos em conexões separadas nunca debitam a mais | `ConcurrentAuthorizationTest`, `IdempotentTransactionAuthorizerTest` |
+| Segurança | Filtros reais: Basic, usuário desabilitado, bloqueio e expiração, sem sessão; handshake TLS de verdade | `ApiSecurityTest`, `TlsTest` |
+| Aceitação | O roteiro de avaliação via HTTP, da criação do cartão a cada recusa, e reenvios com NSU | `ContractAcceptanceTest` |
 
-**Cobertura:** 100% de linhas e branches (JaCoCo). O `./mvnw verify` falha abaixo de 95%.
+**Cobertura:** 99% das linhas e 100% dos branches (JaCoCo); o build falha abaixo de 95%. As duas
+linhas fora são o tratamento de "HmacSHA256 indisponível", que nenhum JDK padrão produz.
 
 **Testes de mutação.** Cobertura só diz que o código rodou. O PIT altera o código de produção
 (inverte condições, troca retornos, remove chamadas) e confere se algum teste falha a cada
-alteração. Resultado atual: **69 de 69 mutantes mortos (100%)**, e o build falha abaixo de 90%.
+alteração. Resultado atual: **109 de 109 mutantes mortos (100%)**, e o build falha abaixo de 90%.
 
-A primeira rodada do PIT achou fraquezas reais que os 100% de cobertura escondiam. A mais clara: o
-teste do controller comparava o corpo da resposta com `reason.code()`, o próprio método testado,
-então trocar todos os códigos de recusa por uma string vazia continuava passando. Agora o teste
-verifica os códigos do contrato literalmente.
+O PIT achou fraquezas reais que a cobertura alta escondia:
+
+- o teste do controller comparava o corpo da resposta com `reason.code()`, o próprio método
+  testado, então trocar todos os códigos de recusa por uma string vazia continuava passando. Agora
+  o teste verifica os códigos do contrato literalmente;
+- o fluxo de idempotência só era exercitado por testes de integração, que ficam fora do PIT;
+  ganhou testes unitários que provam, por exemplo, o rollback do débito no reenvio concorrente.
+
+Os testes também pegaram dois erros de configuração antes de qualquer revisão: com SSL bundle, o
+Spring Boot ignora `server.ssl.ciphers` (o servidor aceitava cifras CBC), e um `delete` em massa
+deixava entidades apagadas no cache do JPA.
 
 As classes de configuração do Spring ficam fora do PIT: seus métodos `@Bean` rodam uma vez na
 subida do contexto de teste, que o PIT reaproveita entre mutantes, então mutá-los não prova nada.
@@ -252,25 +327,27 @@ Os testes de integração cobrem essas classes.
 - **Precedência das recusas:** cartão inexistente, depois senha errada, depois saldo insuficiente.
 - **Requisições malformadas** (JSON inválido, campos ausentes) recebem `400`, caso que o contrato
   não cobre.
-- **Transações não são persistidas**, como a especificação permite; só o saldo do cartão muda.
+- **Transações não são persistidas**, como a especificação permite; só o saldo do cartão muda. A
+  exceção é o registro de idempotência, que guarda só a resposta, por alguns dias.
+- **Reenvio com a mesma chave e outra senha** recebe a resposta original: a chave identifica a
+  transação, e uma nova tentativa do portador deve vir com um novo NSU.
 - **Usuários da API** são gerenciados no banco; o usuário inicial existe para um ambiente novo
   funcionar sem passos manuais.
 
 ## Rumo à produção
 
-O que esta versão deixa de fora de propósito, e como seria resolvido:
+O que esta versão ainda deixa de fora, e como seria resolvido:
 
-- **Idempotência.** Maquininhas reenviam a transação em caso de timeout, e um reenvio é debitado
-  duas vezes. Um identificador da transação vindo do terminal (NSU), gravado com constraint única
-  na mesma transação de banco do débito, tornaria os reenvios seguros.
-- **Senhas dos cartões.** Uma senha de 4 dígitos tem só 10.000 valores possíveis, então um hash
-  vazado pode ser quebrado offline mesmo com BCrypt. Bandeiras reais validam a senha num HSM e nunca
-  a veem em texto puro.
+- **Bloqueio do cartão por senha errada.** O pepper protege contra ataque offline, mas um cliente
+  da API ainda pode tentar as 10.000 senhas online. Bloquear o cartão após 3 senhas erradas
+  seguidas, como fazem os emissores, seria uma nova `AuthorizationRule`.
+- **Rotação do pepper.** Trocar o pepper invalida os hashes existentes. Guardar o identificador da
+  chave junto do hash permitiria conviver com duas versões durante a migração.
 - **Autenticação dos clientes.** O Basic envia a credencial em toda requisição e custa uma checagem
   BCrypt por chamada. Entre sistemas, OAuth2 client credentials (tokens de vida curta) ou mTLS se
-  encaixam melhor, com TLS terminado no gateway, que também deve limitar a taxa por cliente.
-- **Efeito colateral do bloqueio.** Quem conhece um nome de usuário pode bloqueá-lo de propósito. A
-  duração curta limita o dano; rate limit no gateway e alertas nos eventos de bloqueio fechariam a
-  brecha.
+  encaixam melhor, com o gateway limitando a taxa por cliente.
+- **Efeito colateral do bloqueio de usuário.** Quem conhece um nome de usuário pode bloqueá-lo de
+  propósito. A duração curta limita o dano; rate limit no gateway e alertas nos eventos de
+  bloqueio fechariam a brecha.
 - **Observabilidade.** Métricas por motivo de recusa e um log de auditoria das transações (quem,
   quando, qual regra) ficariam ao lado do autorizador.
