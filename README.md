@@ -14,6 +14,7 @@ que decide se uma compra feita na maquininha de cartão é aprovada.
 - [API](#api)
 - [Design](#design)
 - [Segurança](#segurança)
+- [Autenticação dos clientes](#autenticação-dos-clientes)
 - [Concorrência](#concorrência)
 - [Idempotência](#idempotência)
 - [Testes](#testes)
@@ -38,10 +39,12 @@ ainda não existir. Tudo pode ser alterado por variáveis de ambiente:
 | `DB_USERNAME` / `DB_PASSWORD` | `root` / vazia | Credenciais do banco |
 | `API_USERNAME` / `API_PASSWORD` | `username` / `password` | Usuário da API criado na subida |
 | `PIN_PEPPER` | valor público, só para uso local | Segredo (Base64, 32+ bytes) das senhas dos cartões |
+| `TOKEN_SIGNING_KEY` / `TOKEN_VERIFICATION_KEY` | chave efêmera | Par EC P-256 (PEM) que assina os tokens OAuth2 |
 | `TLS_CERTIFICATE` / `TLS_PRIVATE_KEY` | `certs/server.crt` / `certs/server.key` | Certificado PEM do perfil `tls` |
+| `TLS_CLIENT_CA` | `certs/client-ca.crt` | CA dos certificados de cliente (mTLS) |
 
 Com `SPRING_PROFILES_ACTIVE=prod` não há valores padrão: a aplicação não sobe enquanto banco,
-usuário da API e `PIN_PEPPER` não forem informados.
+usuário da API, `PIN_PEPPER` e as chaves dos tokens não forem informados.
 
 ### HTTPS
 
@@ -49,9 +52,15 @@ O contrato chama `http://localhost:8080`, então o perfil padrão continua em HT
 servir HTTPS na 8443:
 
 ```bash
-./scripts/generate-dev-certificate.sh                     # certificado autoassinado em certs/
+./scripts/generate-dev-certificate.sh                     # servidor, CA de clientes e client.p12 em certs/
 SPRING_PROFILES_ACTIVE=tls ./mvnw spring-boot:run          # API em https://localhost:8443
 curl --cacert certs/server.crt -u username:password https://localhost:8443/cartoes/6549873025634501
+```
+
+Com mTLS, o certificado do cliente substitui a senha:
+
+```bash
+curl --cacert certs/server.crt --cert-type P12 --cert certs/client.p12:changeit https://localhost:8443/cartoes/6549873025634501
 ```
 
 ### Contêiner
@@ -76,8 +85,10 @@ Relatórios: `target/site/jacoco/index.html` e `target/pit-reports/index.html`.
 
 ## API
 
-Todos os endpoints exigem autenticação HTTP Basic. Caminhos, nomes de campos e códigos de recusa
-fazem parte do contrato público e seguem em português; o código-fonte é em inglês.
+Todos os endpoints exigem autenticação: HTTP Basic, como pede o contrato, um token OAuth2 ou um
+certificado de cliente (veja [Autenticação dos clientes](#autenticação-dos-clientes)). Caminhos,
+nomes de campos e códigos de recusa fazem parte do contrato público e seguem em português; o
+código-fonte é em inglês. Um cliente que passa do seu limite de requisições recebe `429`.
 
 ### Criar cartão
 
@@ -121,11 +132,25 @@ O header `Idempotency-Key` é opcional (veja [Idempotência](#idempotência)).
 |---|---|---|
 | Autorizada e debitada | `201` | `OK` |
 | Cartão inexistente | `422` | `CARTAO_INEXISTENTE` |
+| Cartão bloqueado por senhas erradas | `422` | `CARTAO_BLOQUEADO` |
 | Senha errada | `422` | `SENHA_INVALIDA` |
 | Saldo insuficiente | `422` | `SALDO_INSUFICIENTE` |
 | Dados ou `Idempotency-Key` inválidos | `400` | problem details |
 | `Idempotency-Key` já usada em outra transação | `409` | problem details |
 | Sem autenticação | `401` | vazio |
+
+### Obter token OAuth2
+
+```bash
+curl -s -u username:password -d grant_type=client_credentials http://localhost:8080/oauth2/token
+```
+
+```json
+{"access_token": "eyJhbGciOiJFUzI1NiJ9...", "token_type": "Bearer", "expires_in": 300, "scope": "api"}
+```
+
+O token vai no header `Authorization: Bearer ...` de qualquer endpoint acima. Um pedido inválido
+recebe `400` com os erros do RFC 6749 (`unsupported_grant_type`, `invalid_scope`, `invalid_request`).
 
 ## Design
 
@@ -135,35 +160,46 @@ cada pacote reúne tudo sobre um conceito e expõe só o que os outros precisam.
 ```
 card/         entidade Card, emissão, consulta de saldo, débito atômico, hashing da senha
 transaction/  regras de autorização, autorizador, idempotência, endpoint
-security/     usuários da API, autenticação Basic, bloqueio por tentativas
+security/     usuários da API, Basic, tokens OAuth2, mTLS, bloqueio por tentativas, rate limit
 web/          problem details para erros de validação
 ```
 
 **Regras de autorização como estratégias (Strategy).** Cada regra implementa `AuthorizationRule`:
 diz se permite a transação e qual recusa produz caso contrário. As regras são beans do Spring
-aplicados na ordem de `@Order` pelo `TransactionAuthorizer`. Uma regra nova (limite diário, cartão
-bloqueado, categoria do estabelecimento) é uma classe nova, sem alterar o autorizador
-(princípio aberto/fechado).
+aplicados na ordem de `@Order` pelo `TransactionAuthorizer`. Uma regra nova (limite diário,
+categoria do estabelecimento) é uma classe nova, sem alterar o autorizador (princípio
+aberto/fechado). O bloqueio do cartão por senha errada entrou exatamente assim: uma classe a mais.
 
 ```java
 public interface AuthorizationRule {
     boolean allows(Card card, Transaction transaction);
     RejectionReason rejectionReason();
 
+    default void onAllowed(Card card, Transaction transaction) { }
+    default void onRejected(Card card, Transaction transaction) { }
+
     default void check(Card card, Transaction transaction) {
         Optional.of(card)
                 .filter(candidate -> allows(candidate, transaction))
-                .orElseThrow(() -> new TransactionRejectedException(rejectionReason()));
+                .ifPresentOrElse(allowed -> onAllowed(allowed, transaction), () -> {
+                    onRejected(card, transaction);
+                    throw new TransactionRejectedException(rejectionReason());
+                });
     }
 }
 ```
 
-A regra de senha roda antes da de saldo, então uma senha errada num cartão zerado responde
-`SENHA_INVALIDA`: sem a senha certa, quem chama não descobre nada sobre o saldo.
+Os ganchos `onAllowed` e `onRejected` deixam cada regra reagir ao próprio resultado: a regra de
+senha conta o erro antes de recusar e esquece os erros quando a senha está certa.
+
+A ordem das regras é cartão bloqueado, senha e saldo. Um cartão bloqueado é recusado sem conferir
+a senha, então palpites durante o bloqueio não contam nem revelam nada; e uma senha errada num
+cartão zerado responde `SENHA_INVALIDA`, então sem a senha certa ninguém descobre o saldo.
 
 **Nenhum `if`.** O desafio opcional foi cumprido em todo o `src/main`. As decisões são expressas
 com polimorfismo (as regras), `Optional` (`orElseThrow`, `filter`, `map`, `ifPresentOrElse`) e mapas
-de enum para resultado (resultado da emissão para status HTTP), sem ternários disfarçados. A recusa
+de enum para resultado (resultado da emissão para status HTTP, decisão do rate limit), sem ternários
+disfarçados. A recusa
 é uma exceção de domínio convertida no `422` em um único lugar.
 
 **Domínio rico, controllers finos.** O `Card` conhece o saldo inicial, sabe se comporta um valor e
@@ -201,11 +237,11 @@ as entidades.
   no servidor, a conexão falha em vez de cair para texto puro. Em produção, `VERIFY_IDENTITY` com a
   CA do banco valida também o certificado do servidor.
 
-**Autenticação.** O contrato exige HTTP Basic, então o trabalho foi deixar o Basic seguro para rodar:
+**Usuários da API.**
 
-- **Usuários da API no banco** (`api_user`), com hash BCrypt atrás de um
-  `DelegatingPasswordEncoder` (`{bcrypt}...`): o algoritmo ou o custo podem mudar depois sem
-  invalidar os hashes gravados. Usuários podem ser desabilitados.
+- **No banco** (`api_user`), com hash BCrypt atrás de um `DelegatingPasswordEncoder`
+  (`{bcrypt}...`): o algoritmo ou o custo podem mudar depois sem invalidar os hashes gravados.
+  Usuários podem ser desabilitados.
 - **Stateless:** sem sessão HTTP, sem cookie, sem request cache. A proteção CSRF fica desligada
   porque não existe credencial ambiente (cookie) que uma requisição de outro site possa usar.
 - **`401` uniforme:** usuário inexistente, senha errada, conta desabilitada ou bloqueada recebem o
@@ -229,8 +265,54 @@ do número do cartão e da senha, com uma chave secreta (*pepper*) que nunca vai
 - Bandeiras reais vão além: validam a senha num HSM e nunca a veem em texto puro. A interface
   `PinHasher` é o ponto onde essa implementação entraria.
 
+O pepper fecha o ataque offline, mas um cliente da API ainda poderia tentar as 10.000 senhas
+online. Por isso **3 senhas erradas dentro de 30 minutos bloqueiam o cartão por 30 minutos**
+(configuráveis), com a resposta `CARTAO_BLOQUEADO`:
+
+- erros mais velhos que a janela não contam, e depois do bloqueio a contagem recomeça do zero;
+- uma senha certa esquece os erros anteriores, sem escrever nada quando não havia erros;
+- janela, contador e bloqueio são `UPDATE`s condicionais: o limite vale entre instâncias e
+  tentativas simultâneas são todas contadas;
+- a senha errada é contada mesmo com a transação recusada, inclusive no fluxo idempotente.
+
 **Logs.** O número do cartão aparece mascarado (`654987******4501`), e o `Transaction.toString()`
 nunca inclui a senha.
+
+## Autenticação dos clientes
+
+O Basic manda a senha em toda requisição e custa uma checagem BCrypt (dezenas de milissegundos de
+CPU) por chamada. Ele continua aceito, porque o contrato o exige, mas há dois caminhos melhores
+para comunicação entre sistemas:
+
+| Mecanismo | Como o cliente prova quem é | Custo por requisição |
+|---|---|---|
+| HTTP Basic | usuário e senha em toda requisição | BCrypt + consulta ao banco |
+| OAuth2 client credentials | senha uma vez em `POST /oauth2/token`; depois um JWT de 5 minutos | só a verificação da assinatura ES256 |
+| mTLS (perfil `tls`) | certificado assinado pela CA de clientes, verificado no handshake | nenhum além do handshake |
+
+**OAuth2 client credentials** ([RFC 6749, seção 4.4](https://www.rfc-editor.org/rfc/rfc6749#section-4.4)):
+
+- O token é um JWT ES256 com emissor, audiência, validade de 5 minutos, id único e escopo `api`.
+  A API confere assinatura, emissor, audiência e validade; um token inválido recebe o desafio do
+  RFC 6750 dizendo por quê.
+- Só a credencial do próprio cliente obtém token, nunca outro token, e a resposta proíbe cache.
+- As chaves vêm de PEM compartilhado entre as instâncias (`TOKEN_SIGNING_KEY`); localmente, sem
+  chave, é gerada uma efêmera.
+- Com `app.security.tokens.enabled=false` o emissor embutido sai de cena e a API passa a validar
+  tokens de um provedor externo (Keycloak, Cognito) via
+  `spring.security.oauth2.resourceserver.jwt.issuer-uri`, que é o desenho mais comum em produção.
+- Uma requisição com token não grava nada no banco: o evento de login só zera as tentativas falhas
+  em login por senha.
+
+**mTLS:** no perfil `tls`, o cliente pode se autenticar só com o certificado. O CN é o usuário da
+API, que ainda precisa estar habilitado e desbloqueado. `client-auth: want` mantém os clientes
+Basic e Bearer funcionando, então o mTLS pode ser adotado cliente a cliente.
+
+**Limite de requisições por cliente.** Cada cliente autenticado (por qualquer dos três meios) tem um
+token bucket: rajada de 200 e 100 requisições por segundo sustentadas, configuráveis. Passou
+disso, `429` com `Retry-After`. Os buckets ficam na memória de cada instância, então o limite
+efetivo cresce com o número de instâncias: é uma rede de proteção, e o limite global por cliente é
+papel do API gateway, que vê o tráfego de todas.
 
 ## Concorrência
 
@@ -284,7 +366,7 @@ debitado uma vez só.
 
 ## Testes
 
-São 137 testes, divididos assim:
+São 198 testes, divididos assim:
 
 | Tipo | O que garante | Exemplos |
 |---|---|---|
@@ -292,15 +374,16 @@ São 137 testes, divididos assim:
 | Fatia web | O contrato exato: status, corpos em texto, eco do JSON, erros de validação, `401`, `409` | `CardControllerTest`, `TransactionControllerTest` |
 | Repositório | Queries e constraints contra o MySQL 5.7 real (Testcontainers), conexão cifrada | `CardRepositoryTest`, `ProcessedTransactionRepositoryTest`, `DatabaseTlsTest` |
 | Concorrência | Transações e reenvios simultâneos em conexões separadas nunca debitam a mais | `ConcurrentAuthorizationTest`, `IdempotentTransactionAuthorizerTest` |
-| Segurança | Filtros reais: Basic, usuário desabilitado, bloqueio e expiração, sem sessão; handshake TLS de verdade | `ApiSecurityTest`, `TlsTest` |
-| Aceitação | O roteiro de avaliação via HTTP, da criação do cartão a cada recusa, e reenvios com NSU | `ContractAcceptanceTest` |
+| Bloqueio do cartão | Janela, contagem e bloqueio em SQL real, e o fluxo completo pelas regras | `CardPinLockoutRepositoryTest`, `PinLockoutTest` |
+| Segurança | Filtros reais: Basic, OAuth2 (token expirado, de outro emissor, de outra audiência), mTLS, bloqueios, rate limit; handshakes TLS de verdade | `ApiSecurityTest`, `OAuth2ClientCredentialsTest`, `TlsTest`, `RateLimitTest` |
+| Aceitação | O roteiro de avaliação via HTTP, da criação do cartão a cada recusa, reenvios com NSU e bloqueio | `ContractAcceptanceTest` |
 
-**Cobertura:** 99% das linhas e 100% dos branches (JaCoCo); o build falha abaixo de 95%. As duas
-linhas fora são o tratamento de "HmacSHA256 indisponível", que nenhum JDK padrão produz.
+**Cobertura:** 99% das linhas e 100% dos branches (JaCoCo); o build falha abaixo de 95%. As linhas
+fora tratam algoritmos indisponíveis (HmacSHA256, curva P-256), que nenhum JDK padrão produz.
 
 **Testes de mutação.** Cobertura só diz que o código rodou. O PIT altera o código de produção
 (inverte condições, troca retornos, remove chamadas) e confere se algum teste falha a cada
-alteração. Resultado atual: **109 de 109 mutantes mortos (100%)**, e o build falha abaixo de 90%.
+alteração. Resultado atual: **178 de 178 mutantes mortos (100%)**, e o build falha abaixo de 90%.
 
 O PIT achou fraquezas reais que a cobertura alta escondia:
 
@@ -308,11 +391,16 @@ O PIT achou fraquezas reais que a cobertura alta escondia:
   testado, então trocar todos os códigos de recusa por uma string vazia continuava passando. Agora
   o teste verifica os códigos do contrato literalmente;
 - o fluxo de idempotência só era exercitado por testes de integração, que ficam fora do PIT;
-  ganhou testes unitários que provam, por exemplo, o rollback do débito no reenvio concorrente.
+  ganhou testes unitários que provam, por exemplo, o rollback do débito no reenvio concorrente;
+- um teste de configuração aceitava um `TokenIssuer` nulo (`hasSingleBean` conta beans nulos);
+  agora emite e valida um token de verdade;
+- o arredondamento do `Retry-After` podia ser trocado sem nenhum teste falhar, e com razão: o
+  bucket repõe ao menos uma requisição por segundo, então a espera nunca passa de 1 s. A conta saiu.
 
-Os testes também pegaram dois erros de configuração antes de qualquer revisão: com SSL bundle, o
-Spring Boot ignora `server.ssl.ciphers` (o servidor aceitava cifras CBC), e um `delete` em massa
-deixava entidades apagadas no cache do JPA.
+Os testes também pegaram erros de configuração antes de qualquer revisão: com SSL bundle, o Spring
+Boot ignora `server.ssl.ciphers` (o servidor aceitava cifras CBC); um `delete` em massa deixava
+entidades apagadas no cache do JPA; e o `NimbusJwtDecoder.withPublicKey` só aceita RSA, então o
+decoder ES256 é montado direto sobre o processador do Nimbus.
 
 As classes de configuração do Spring ficam fora do PIT: seus métodos `@Bean` rodam uma vez na
 subida do contexto de teste, que o PIT reaproveita entre mutantes, então mutá-los não prova nada.
@@ -324,7 +412,11 @@ Os testes de integração cobrem essas classes.
 - **Valor:** positivo, no mínimo 0,01, com no máximo duas casas decimais; fora disso é `400`.
 - **Formato do saldo:** sempre com duas casas decimais (`500.00`, `495.15`).
 - **Cartão repetido:** o cartão existente não é alterado, qualquer que seja a senha da nova requisição.
-- **Precedência das recusas:** cartão inexistente, depois senha errada, depois saldo insuficiente.
+- **Precedência das recusas:** cartão inexistente, cartão bloqueado, senha errada, saldo insuficiente.
+- **`CARTAO_BLOQUEADO`** é um código além dos três do contrato. O roteiro de avaliação erra a senha
+  uma vez só, então nunca chega a bloquear um cartão.
+- **Bloqueio do cartão:** a terceira senha errada dentro da janela ainda responde `SENHA_INVALIDA` e
+  bloqueia o cartão; a partir da tentativa seguinte, a resposta é `CARTAO_BLOQUEADO`.
 - **Requisições malformadas** (JSON inválido, campos ausentes) recebem `400`, caso que o contrato
   não cobre.
 - **Transações não são persistidas**, como a especificação permite; só o saldo do cartão muda. A
@@ -338,16 +430,15 @@ Os testes de integração cobrem essas classes.
 
 O que esta versão ainda deixa de fora, e como seria resolvido:
 
-- **Bloqueio do cartão por senha errada.** O pepper protege contra ataque offline, mas um cliente
-  da API ainda pode tentar as 10.000 senhas online. Bloquear o cartão após 3 senhas erradas
-  seguidas, como fazem os emissores, seria uma nova `AuthorizationRule`.
 - **Rotação do pepper.** Trocar o pepper invalida os hashes existentes. Guardar o identificador da
   chave junto do hash permitiria conviver com duas versões durante a migração.
-- **Autenticação dos clientes.** O Basic envia a credencial em toda requisição e custa uma checagem
-  BCrypt por chamada. Entre sistemas, OAuth2 client credentials (tokens de vida curta) ou mTLS se
-  encaixam melhor, com o gateway limitando a taxa por cliente.
-- **Efeito colateral do bloqueio de usuário.** Quem conhece um nome de usuário pode bloqueá-lo de
-  propósito. A duração curta limita o dano; rate limit no gateway e alertas nos eventos de
-  bloqueio fechariam a brecha.
+- **Revogação.** Um token emitido vale até expirar (5 minutos), mesmo que o cliente seja
+  desabilitado; certificados de cliente não têm checagem de revogação (CRL/OCSP). Tokens e
+  certificados de vida curta limitam a janela; uma lista de tokens revogados por `jti` a fecharia.
+- **Rate limit global.** O limite por instância é uma rede de proteção; o global por cliente fica
+  no API gateway (ou num bucket distribuído, como Bucket4j sobre Redis).
+- **Efeito colateral dos bloqueios.** Quem conhece um nome de usuário ou um número de cartão pode
+  bloqueá-lo de propósito. A duração curta limita o dano; rate limit no gateway e alertas nos
+  eventos de bloqueio fechariam a brecha.
 - **Observabilidade.** Métricas por motivo de recusa e um log de auditoria das transações (quem,
   quando, qual regra) ficariam ao lado do autorizador.
