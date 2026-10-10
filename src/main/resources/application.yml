@@ -13,6 +13,8 @@ spring:
       hibernate:
         # Hibernate 6.6's MySQLDialect targets MySQL 8+; the provided MySQL 5.7 needs the legacy dialect.
         dialect: org.hibernate.community.dialect.MySQLLegacyDialect
+        jdbc:
+          time_zone: UTC
   liquibase:
     change-log: classpath:db/changelog/db.changelog-master.yaml
 
@@ -31,3 +33,6 @@ app:
     bootstrap-user:
       username: ${API_USERNAME:username}
       password: ${API_PASSWORD:password}
+    lockout:
+      max-attempts: 5
+      duration: 15m

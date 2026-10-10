@@ -8,7 +8,9 @@ import jakarta.persistence.Version;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetails;
 
+import java.time.Instant;
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * A client system allowed to call the API (a card terminal network, for instance).
@@ -28,6 +30,14 @@ public class ApiUser {
 
     @Column(name = "enabled", nullable = false)
     private boolean enabled;
+
+    // Both lockout fields are written only through conditional UPDATEs in ApiUserRepository,
+    // so concurrent failed logins on several instances are all counted.
+    @Column(name = "failed_attempts", nullable = false)
+    private int failedAttempts;
+
+    @Column(name = "locked_until")
+    private Instant lockedUntil;
 
     @Version
     @Column(name = "version", nullable = false)
@@ -50,6 +60,10 @@ public class ApiUser {
         enabled = false;
     }
 
+    public boolean isLockedAt(Instant instant) {
+        return Optional.ofNullable(lockedUntil).filter(instant::isBefore).isPresent();
+    }
+
     public String getUsername() {
         return username;
     }
@@ -58,10 +72,19 @@ public class ApiUser {
         return passwordHash;
     }
 
-    UserDetails toUserDetails() {
+    int getFailedAttempts() {
+        return failedAttempts;
+    }
+
+    Optional<Instant> getLockedUntil() {
+        return Optional.ofNullable(lockedUntil);
+    }
+
+    UserDetails toUserDetails(Instant now) {
         return User.withUsername(username)
                 .password(passwordHash)
                 .disabled(!enabled)
+                .accountLocked(isLockedAt(now))
                 .roles(ROLE)
                 .build();
     }

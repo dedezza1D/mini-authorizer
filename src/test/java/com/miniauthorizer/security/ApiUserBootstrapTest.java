@@ -9,6 +9,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.factory.PasswordEncoderFactories;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.time.Duration;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -28,7 +29,8 @@ class ApiUserBootstrapTest {
 
     private ApiUserBootstrap bootstrap() {
         return new ApiUserBootstrap(repository, passwordEncoder, new ApiSecurityProperties(
-                new ApiSecurityProperties.BootstrapUser("terminal", "s3cret")));
+                new ApiSecurityProperties.BootstrapUser("terminal", "s3cret"),
+                new ApiSecurityProperties.Lockout(5, Duration.ofMinutes(15))));
     }
 
     @Test
